@@ -1,0 +1,41 @@
+SystemLog is an Android service developed at the Center For Embedded
+Networked Sensing (CENS) to facilitates collecting logs during
+deployment of mobile application. The SystemLog client runs as an
+Android Service on the phone. It defines a simple interface using the
+Android Interface Definition Language (AIDL). All other applications
+can send their log messages to SystemLog. SystemLog will augment log
+messages with information such as date and time and name of the logger
+application. The log records are kept in a local SQLite database. When
+SystemLog detects the phone is plugged to external power, it will
+upload the log records to this server.
+
+SystemLog is maintained by Hossein Falaki. For additional information
+please contact: falaki@cs.ucla.edu.
+
+Instructions
+SystemLog can be used both as an application logging tool and a tool
+for uploading your data.
+
+o Download Log.java and ISystemLog.java into your Android project under src/edu/ucla/cens/systemlog.
+
+o Import the new classes in your project. (instead of android.util.Log) 
+> import edu.ucla.cens.systemlog.Log;
+> import edu.ucla.cens.systemlog.ISystemLog;
+
+o Pass your application name to SystemLog with the following call in your onCreate() (You need to do this only once):
+> Log.setAppName("MyApplicationName"); 
+Remember this name. This is your logger name. Send this string to Hossein to get a SystemLog login.
+
+o Bind to the SystemLog service with the following call. The place to put this call is again in the onCreate():
+> bindService(new Intent(ISystemLog.class.getName()),
+> Log.SystemLogConnection, Context.BIND_AUTO_CREATE);
+
+o Remember to unbind from SystemLog when your service or activity finishes (for example in onDestroy() of your service):
+> unbindService(Log.SystemLogConnection);
+
+o At any point in your code you can use the methods of the static Log class to send log messages. They are very similar to default Android Log interface.  For example:
+> Log.i(TAG1, "Launched new view");
+> Log.e(TAG2, "Got exception while sending data", e);
+TAG1 and TAG2 can be any String tags. You can filter your log messages using these tags.
+
+o If the SystemLog package is installed on the phone all the messages that you log will be uploaded to this server. You can access your logs and browse them using your SystemLog login.
