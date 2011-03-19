@@ -93,6 +93,8 @@ public class Uploader
 
         try
         {
+            mDbAdaptor.open();
+
             c = mDbAdaptor.fetchAllEntries();
             int logIndex = c.getColumnIndex(
                     SystemLogDbAdaptor.KEY_LOGRECORD);
@@ -191,6 +193,7 @@ public class Uploader
                             + "Will try at another time");
 
                     c.close();
+                    mDbAdaptor.close();
                     SystemLogWakeLock.releaseCpuLock();
                     return;
                 }
@@ -198,6 +201,7 @@ public class Uploader
             }
 
             c.close();
+            mDbAdaptor.close();
             SystemLogWakeLock.releaseCpuLock();
             return;
             
@@ -206,7 +210,10 @@ public class Uploader
         {
             Log.e(TAG, "Exception", e);
             if (c != null)
+            {
                 c.close();
+                mDbAdaptor.close();
+            }
 
             SystemLogWakeLock.releaseCpuLock();
         }

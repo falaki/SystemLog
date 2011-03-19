@@ -25,6 +25,7 @@ public class Log
         sAppName = name;
     }
 
+
 		
     public static ServiceConnection SystemLogConnection 
         = new ServiceConnection() 
@@ -64,6 +65,12 @@ public class Log
                     "Not connected to SystemLog. Could not register "
                     + tag);
 		}    	
+    }
+
+
+    public static boolean isConnected()
+    {
+        return sConnected;
     }
 
     public static boolean isRegistered(String tag)

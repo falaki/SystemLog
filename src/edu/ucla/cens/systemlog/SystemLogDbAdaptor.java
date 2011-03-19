@@ -11,7 +11,16 @@ import android.database.Cursor;
 import android.database.SQLException;
 import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteOpenHelper;
+import android.os.PowerManager;
 import android.util.Log;
+
+import java.text.SimpleDateFormat;
+import java.util.Locale;
+import java.util.HashSet;
+import java.util.Calendar;
+
+import org.json.JSONObject;
+import org.json.JSONException;
 
 /**
  * Simple  database access helper class. 
@@ -28,9 +37,23 @@ public class SystemLogDbAdaptor
     public static final String KEY_TIME = "recordtime";
     public static final String KEY_ROWID = "_id";
 
+
+    private static final String IMEI = SystemLog.IMEI;
+    private static final String VER = SystemLog.VER;
+
+
+    private SimpleDateFormat mSDF;
+
     private static final String TAG = "SystemLogDbAdapter";
     private DatabaseHelper mDbHelper;
     private SQLiteDatabase mDb;
+
+
+    private HashSet<ContentValues> mBuffer;
+    private HashSet<ContentValues> mTempBuffer;
+
+    private boolean mOpenLock = false;
+    private boolean mFlushLock = false;
     
     /** Database creation SQL statement */
     private static final String DATABASE_CREATE =
@@ -42,6 +65,7 @@ public class SystemLogDbAdaptor
     private static final int DATABASE_VERSION = 3;
 
     private final Context mCtx;
+    private final PowerManager.WakeLock mWL;
 
     private static class DatabaseHelper extends SQLiteOpenHelper 
     {
@@ -78,6 +102,15 @@ public class SystemLogDbAdaptor
     public SystemLogDbAdaptor(Context ctx) 
     {
         this.mCtx = ctx;
+
+        mBuffer = new HashSet<ContentValues>();
+
+        PowerManager pm = (PowerManager)
+            ctx.getSystemService(Context.POWER_SERVICE);
+        mWL = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, TAG);
+        mWL.setReferenceCounted(false);
+
+        mSDF = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US);
     }
 
     /**
@@ -91,39 +124,143 @@ public class SystemLogDbAdaptor
      * @throws SQLException if the database could be neither opened or
      *                      created
      */
-    public SystemLogDbAdaptor open() throws SQLException 
+    public synchronized SystemLogDbAdaptor open() throws SQLException 
     {
-        mDbHelper = new DatabaseHelper(mCtx);
-        mDb = mDbHelper.getWritableDatabase();
+        if (!mFlushLock)
+        {
+            mDbHelper = new DatabaseHelper(mCtx);
+            mDb = mDbHelper.getWritableDatabase();
+        }
+        mOpenLock = true;
         return this;
     }
     
     /**
       * Closes the database.
       */
-    public void close() 
+    public synchronized void close() 
     {
-        mDbHelper.close();
+        if (!mFlushLock)
+            mDbHelper.close();
+        mOpenLock = false;
     }
 
 
     /**
-     * Create a new entry using the logrecord provided. 
-     * If the entry is successfully created returns the new rowId for
-     * that entry, otherwise returns a -1 to indicate failure.
-     * 
-     * @param logrecord        	log record for the entry
-     * @param logger			logger name
-     * @return                  rowId or -1 if failed
+     * Constructs a log record JSON object with the given message
+     * as the log message field and the given type as the type field. 
+     * Returns the string representation of this new object.
+     *
+     * @param   message     log message
+     * @param   tag         message tag
+     * @param   level       Log level string
+     * @param   logger      logger name
      */
-    public synchronized long createEntry(String logger, String time, String logrecord) 
+    public synchronized void createEntry(String message, String tag, String level, String logger)
     {
+        JSONObject dataRecord = new JSONObject();
+
+        // First thing, get the current time
+        final Calendar cal = Calendar.getInstance();
+        String timeStr = mSDF.format(cal.getTime());
+
+        /*
+        String timeStr = "" +
+            c.get(Calendar.YEAR) + "-" +
+            (c.get(Calendar.MONTH) + 1) + "-" +
+            c.get(Calendar.DAY_OF_MONTH) + " " +
+            c.get(Calendar.HOUR_OF_DAY) + ":" +
+            c.get(Calendar.MINUTE) + ":" +
+            c.get(Calendar.SECOND);
+        */
+
+        try
+        {
+            dataRecord.put("date", timeStr);
+            dataRecord.put("time_stamp", cal.getTimeInMillis());
+            dataRecord.put("user", IMEI);
+            dataRecord.put("tag", tag);
+            dataRecord.put("logger", logger);
+            dataRecord.put("ver", VER);
+            dataRecord.put("message", message);
+            dataRecord.put("level", level);
+        }
+        catch (JSONException e)
+        {
+            Log.e(TAG, "JSON Error", e);
+        }
+
+
         ContentValues initialValues = new ContentValues();
         initialValues.put(KEY_LOGGER, logger);
-        initialValues.put(KEY_LOGRECORD, logrecord);
-        initialValues.put(KEY_TIME, time);
+        initialValues.put(KEY_LOGRECORD, dataRecord.toString());
+        initialValues.put(KEY_TIME, timeStr);
 
-        return mDb.insert(DATABASE_TABLE, null, initialValues);
+        mBuffer.add(initialValues);
+
+
+    }
+
+
+
+
+    /**
+     * Opens a new thread and flush the cached log records into the
+     * database. 
+     */
+    public void flushDb()
+    {
+        synchronized(this)
+        {
+            mTempBuffer = mBuffer;
+            mBuffer = new HashSet<ContentValues>();
+        }
+
+        Log.i(TAG, "flushDB called to flush " + mTempBuffer.size() 
+                + " records.");
+
+        Thread flushThread = new Thread()
+        {
+            public void run()
+            {
+                mWL.acquire();
+
+                if (!mOpenLock)
+                {
+                    try
+                    {
+                        mDbHelper = new DatabaseHelper(mCtx);
+                        mDb = mDbHelper.getWritableDatabase();
+                    }
+                    catch (SQLException se)
+                    {
+                        Log.e(TAG, "Could not open DB to flush records" , 
+                                se);
+                    }
+                }
+                mFlushLock = true;
+
+                Log.i(TAG, "Flusshing " 
+                        + mTempBuffer.size() + " records.");
+
+                for (ContentValues value : mTempBuffer)
+                    mDb.insert(DATABASE_TABLE, null, value);
+
+                if (!mOpenLock)
+                {
+                    mDb.close();
+                    mDbHelper.close();
+                }
+
+                mFlushLock = false;
+                mWL.release();
+            }
+
+        };
+
+        flushThread.start();
+
+
     }
 
     /**

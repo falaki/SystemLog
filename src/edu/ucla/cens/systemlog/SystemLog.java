@@ -1,7 +1,10 @@
 package edu.ucla.cens.systemlog;
 
 import java.util.HashMap;
-import java.util.Calendar;
+import java.util.ArrayList;
+import java.util.Arrays;
+
+
 import android.content.BroadcastReceiver;
 import android.app.Service;
 import android.content.Context;
@@ -21,9 +24,6 @@ import android.database.SQLException;
 
 import android.util.AndroidException;
 
-import org.json.JSONObject;
-import org.json.JSONException;
-
 /**
  * SystemLog runs as a service and receives log messages from
  * other applications on the phone. The log messages are saved
@@ -35,12 +35,25 @@ public class SystemLog extends Service
 	/** name of the service used for adb logging */
 	private static final String TAG = "SystemLog";
 
+
+    private static String ACTION_LOG_MESSAGE =
+                "edu.ucla.cens.systemlog.log_message";
+
+    private static final String KEY_TAG =
+                "edu.ucla.cens.systemlog.key_tag";
+    private static final String KEY_MSG =
+                "edu.ucla.cens.systemlog.key_msg";
+    private static final String KEY_APP_NAME =
+                "edu.ucla.cens.systemlog.key_app_name";
+    private static final String KEY_LOG_LEVEL =
+                "edu.ucla.cens.systemlog.key_log_level";
+
     public static final String UPLOAD_ACTION = "upload";
 	
 	private static final boolean OPERATE_LOCAL = false;
 	
 	/** Version of SystemLog JSON record format */
-	private static final String VER = "2.2";
+	public static final String VER = "2.2";
 	
 	/** Types of messages used by this service */
     private static final int UPLOAD_START_MSG = 2;
@@ -50,13 +63,15 @@ public class SystemLog extends Service
     /** Time units */
     private static final long ONE_SECOND = 1000;
     private static final long ONE_MINUTE = 60 * ONE_SECOND;
-    private static final long TEN_MINUTES = 10 * ONE_MINUTE;
+    private static final long TWO_MINUTES = 2 * ONE_MINUTE;
     
     private static final String ERROR_LOGLEVEL = "error";
     private static final String WARNING_LOGLEVEL = "warning";
     private static final String INFO_LOGLEVEL = "info";
     private static final String DEBUG_LOGLEVEL = "debug";
     private static final String VERBOSE_LOGLEVEL = "verbose";
+
+    private ArrayList<String> mLogLevels;
     
     /** The default sensorbase.org table name */
     private static final String DEFAULT_LOGGER = "androidsyslog2";
@@ -79,6 +94,12 @@ public class SystemLog extends Service
     
     /** telephonyManager object */
     private TelephonyManager mTelManager;
+
+
+    /** Alarm Manager object */
+    AlarmManager  mAlarmManager;
+
+    PendingIntent mUploadSender;
     
     /** Table that keeps tag to table name associations */
     private HashMap<String, String> mTagMapping;
@@ -88,39 +109,6 @@ public class SystemLog extends Service
 	
 	private final ISystemLog.Stub mBinder = new ISystemLog.Stub()
 	{
-		/**
-		 * Private method used internally for logging.
-		 * 
-		 * @param 		tag			tag associated with the log message
-		 * @param 		message		log message
-		 * @param 		loglevel	log level string 
-		 */
-		private boolean log(String tag, String message, String loglevel)
-		{
-			String logger;
-
-            // Filter non-ascii characters.
-            String filteredMsg = message.replaceAll("[^\\x20-\\x7e]", "");
-
-            Log.i(TAG, "Received from " + tag + ": " + filteredMsg);
-
-            
-			if (!mTagMapping.containsKey(tag))
-            {
-                return false;
-            }
-            else
-            {
-			    logger = mTagMapping.get(tag);
-            }
-
-
-
-
-            constructLogRecord(filteredMsg, tag, loglevel, logger);
-            return true;
-			
-		}
 
         /** 
          * Returns true of the given tag has been registered.  
@@ -268,20 +256,6 @@ public class SystemLog extends Service
                 int status = intent.getIntExtra("status",
                         BatteryManager.BATTERY_STATUS_UNKNOWN);
 
-
-                //First check if the phone is plugged, to trigger
-                //upload.
-                /*
-                if (status == BatteryManager.BATTERY_STATUS_CHARGING)
-                {
-                	mIsPlugged = true;
-                }
-                
-                if (status == BatteryManager.BATTERY_STATUS_DISCHARGING)
-                {
-                	mIsPlugged = false;
-                }
-                */
                  
             }
         }
@@ -305,12 +279,23 @@ public class SystemLog extends Service
             String action = intent.getAction();
 
             if (action != null)
+            {
                 if (action.equals(UPLOAD_ACTION))
+                {
+                    Log.i(TAG, "Flushing to DB.");
+                    mDbAdaptor.flushDb();
                     if (mIsPlugged)
                     {
                         Log.i(TAG, "Asking for an upload.");
                         upload();
                     }
+                }
+                else if(action.equals(ACTION_LOG_MESSAGE))
+                {
+                    logIntentMessage(intent);
+                }
+
+            }
         }
 
     }
@@ -319,6 +304,7 @@ public class SystemLog extends Service
     public void onDestroy()
     {
         unregisterReceiver(mBatteryInfoReceiver);
+        mAlarmManager.cancel(mUploadSender);
     }
 	
     @Override
@@ -338,14 +324,12 @@ public class SystemLog extends Service
         mDumper = new SystemLogDumper(mDbAdaptor);
 
 
-        try
-        {
-            mDbAdaptor.open();
-        }
-        catch (SQLException e)
-        {
-            Log.e(TAG, "Exception", e);
-        }
+        mLogLevels = new ArrayList<String>(Arrays.asList(
+                    ERROR_LOGLEVEL,
+                    WARNING_LOGLEVEL,
+                    INFO_LOGLEVEL,
+                    DEBUG_LOGLEVEL,
+                    VERBOSE_LOGLEVEL));
 
         // Register for battery updates
         registerReceiver(mBatteryInfoReceiver, new IntentFilter(
@@ -355,60 +339,88 @@ public class SystemLog extends Service
         // Register for a repeating alarm every five minutes
         Intent alarmIntent = new Intent(SystemLog.this,
                 SystemLogAlarmReceiver.class);
-        PendingIntent sender = PendingIntent.getBroadcast(
+         mUploadSender = PendingIntent.getBroadcast(
                 SystemLog.this, 0, alarmIntent, 0);
         long firstTime = SystemClock.elapsedRealtime() +
-            (TEN_MINUTES);
+            (TWO_MINUTES);
 
-        AlarmManager am = (AlarmManager)
+        mAlarmManager = (AlarmManager)
             getSystemService(ALARM_SERVICE);
-        am.setRepeating(AlarmManager.ELAPSED_REALTIME_WAKEUP,
-                firstTime, TEN_MINUTES, sender);
+        mAlarmManager.setRepeating(AlarmManager.ELAPSED_REALTIME,
+                firstTime, TWO_MINUTES, mUploadSender);
     }
+
+
+    /**
+     * Private method used internally for logging.
+     * 
+     * @param 		tag			tag associated with the log message
+     * @param 		message		log message
+     * @param 		loglevel	log level string 
+     */
+    private boolean log(String tag, String message, String loglevel)
+    {
+        String logger;
+
+        // Filter non-ascii characters.
+        String filteredMsg = message.replaceAll("[^\\x20-\\x7e]", "");
+
+        Log.i(TAG, "Received from " + tag + ": " + filteredMsg);
+
+        
+        if (!mTagMapping.containsKey(tag))
+        {
+            return false;
+        }
+        else
+        {
+            logger = mTagMapping.get(tag);
+        }
+
+
+        mDbAdaptor.createEntry(filteredMsg, tag, loglevel, logger);
+        return true;
+        
+    }
+
     
     /**
-     * Constructs a log record JSON object with the given message
-     * as the log message field and the given type as the type field. 
-     * Returns the string representation of this new object.
+     * Constructs a log record from information encoded in an Intent.
      *
-     * @param   data        JSONObject to be used for the data field
-     * @param   type        String to be used for the type field
-     * @return 				String representing the JSON record
+     * @param   intent        Intent received from logger app.
      */
-    private void constructLogRecord(String message, String tag, String level, String logger)
+    private void logIntentMessage(Intent intent)
     {
-        JSONObject dataRecord = new JSONObject();
+        String appName = intent.getStringExtra(KEY_APP_NAME);
+        String tag = intent.getStringExtra(KEY_TAG);
+        String msg = intent.getStringExtra(KEY_MSG);
+        String logLevel = intent.getStringExtra(KEY_LOG_LEVEL);
 
-        // First thing, get the current time
-        final Calendar c = Calendar.getInstance();
-        String timeStr = "" +
-            c.get(Calendar.YEAR) + "-" +
-            (c.get(Calendar.MONTH) + 1) + "-" +
-            c.get(Calendar.DAY_OF_MONTH) + " " +
-            c.get(Calendar.HOUR_OF_DAY) + ":" +
-            c.get(Calendar.MINUTE) + ":" +
-            c.get(Calendar.SECOND);
 
-        try
+        if(appName == null || 
+                tag == null || 
+                msg == null || 
+                logLevel == null) 
         {
-            dataRecord.put("date", timeStr);
-            dataRecord.put("time_stamp", c.getTimeInMillis());
-            dataRecord.put("user", IMEI);
-            dataRecord.put("tag", tag);
-            dataRecord.put("logger", logger);
-            dataRecord.put("ver", VER);
-            dataRecord.put("message", message);
-            dataRecord.put("level", level);
-        }
-        catch (JSONException e)
-        {
-            Log.e(TAG, "Exception", e);
+            Log.w(TAG, "Received message intent with null field(s).");
+            return;
         }
 
-        mDbAdaptor.createEntry(logger, timeStr, dataRecord.toString());
+        if (!mLogLevels.contains(logLevel))
+        {
+            Log.w(TAG, "Invalid log level string.");
+            return;
+        }
 
+        //Register the tag if necessary
+        if(!mTagMapping.containsKey(tag)) 
+        {
+            Log.i(TAG, "Registering " + tag + " for " + appName);
+            mTagMapping.put(tag, appName);
+        }
+
+        log(tag, msg, logLevel);
     }
-
     
     
     /**
