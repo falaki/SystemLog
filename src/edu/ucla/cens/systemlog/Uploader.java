@@ -193,6 +193,8 @@ public class Uploader
                             + "Will try at another time");
 
                     c.close();
+
+                    // Tickle the DB
                     mDbAdaptor.close();
                     SystemLogWakeLock.releaseCpuLock();
                     return;
@@ -201,6 +203,7 @@ public class Uploader
             }
 
             c.close();
+            mDbAdaptor.tickle();
             mDbAdaptor.close();
             SystemLogWakeLock.releaseCpuLock();
             return;

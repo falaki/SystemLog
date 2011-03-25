@@ -11,6 +11,7 @@ import android.database.Cursor;
 import android.database.SQLException;
 import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteOpenHelper;
+import android.database.sqlite.SQLiteStatement;
 import android.os.PowerManager;
 import android.util.Log;
 
@@ -48,6 +49,8 @@ public class SystemLogDbAdaptor
     private DatabaseHelper mDbHelper;
     private SQLiteDatabase mDb;
 
+    private long mDbBirthDate;
+
 
     private HashSet<ContentValues> mBuffer;
     private HashSet<ContentValues> mTempBuffer;
@@ -58,11 +61,23 @@ public class SystemLogDbAdaptor
     /** Database creation SQL statement */
     private static final String DATABASE_CREATE =
             "create table systemlog (_id integer primary key "
-           + "autoincrement, logger text not null, recordtime text not null, logrecord text not null);";
+           + "autoincrement, logger text not null, "
+           + "recordtime text not null, logrecord text not null);";
+    private static final String DATABASE_DROP = 
+        "DROP TABLE IF EXISTS systemlog";
+
 
     private static final String DATABASE_NAME = "data";
     private static final String DATABASE_TABLE = "systemlog";
     private static final int DATABASE_VERSION = 3;
+
+    private static final long ONE_MINUTE = 1000 * 60;
+    private static final long ONE_HOUR = 60 * ONE_MINUTE;
+    private static final long ONE_DAY = 24 * ONE_HOUR;
+
+
+    private static final long MIN_TICKLE_INTERVAL = ONE_DAY;
+
 
     private final Context mCtx;
     private final PowerManager.WakeLock mWL;
@@ -86,9 +101,10 @@ public class SystemLogDbAdaptor
         public void onUpgrade(SQLiteDatabase db, int oldVersion, 
                 int newVersion) 
         {
-            Log.w(TAG, "Upgrading database from version " + oldVersion + " to "
+            Log.w(TAG, "Upgrading database from version " 
+                    + oldVersion + " to "
                     + newVersion + ", which will destroy all old data");
-            db.execSQL("DROP TABLE IF EXISTS systemlog");
+            db.execSQL(DATABASE_DROP);
             onCreate(db);
         }
     }
@@ -111,6 +127,9 @@ public class SystemLogDbAdaptor
         mWL.setReferenceCounted(false);
 
         mSDF = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US);
+
+        mDbBirthDate = 0L;
+
     }
 
     /**
@@ -143,6 +162,48 @@ public class SystemLogDbAdaptor
         if (!mFlushLock)
             mDbHelper.close();
         mOpenLock = false;
+    }
+
+
+    /**
+      * Cause the database adaptor to drop the table and clreate it
+      * again. This hack is necessary to prevent the index values from
+      * getting too large. When the DB is created the index starts
+      * from 0.  This method assumes that the database has been
+      * opened.
+      */
+    public synchronized void tickle()
+    {
+
+        Log.i(TAG, "Got a tickle");
+
+
+        if (!mOpenLock)
+                return;
+
+
+        long curTime = Calendar.getInstance().getTimeInMillis();
+
+        if (curTime - mDbBirthDate < MIN_TICKLE_INTERVAL)
+                return;
+
+
+        SQLiteStatement countQuery = mDb.compileStatement(
+                        "SELECT COUNT (*) FROM " + DATABASE_TABLE +
+                        ";");
+
+        long count = countQuery.simpleQueryForLong();
+
+        if (count == 0)
+        {
+            Log.i(TAG, "Dropping the table.");
+            mDb.execSQL(DATABASE_DROP);
+
+            Log.i(TAG, "Creating a new table.");
+            mDb.execSQL(DATABASE_CREATE);
+
+            mDbBirthDate = curTime;
+        }
     }
 
 
