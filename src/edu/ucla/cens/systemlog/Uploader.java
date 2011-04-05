@@ -62,7 +62,7 @@ public class Uploader
 
     /** Upload location of the SystemSens server */
     private static final String CUSTOM_URL 
-        = "https://systemsens.cens.ucla.edu/systemlog/logs/put/";
+        = "https://systemlog2.cens.ucla.edu/systemlog/logs/put/";
 
 
     private static final String IMEI = SystemLog.IMEI;
@@ -90,6 +90,7 @@ public class Uploader
         Log.i(TAG, "tryUpload started");
         Cursor  c = null;
         boolean postResult = false;
+        boolean noError = true;
 
         try
         {
@@ -106,20 +107,21 @@ public class Uploader
                     SystemLogDbAdaptor.KEY_LOGGER);
 
 
-            Integer id;
-            int dbSize =  c.getCount();
+            Integer id, pId;
             HashSet<Integer> keySet = new HashSet<Integer>();
             String newRecord, newTime;
             ArrayList<String> content;
 
             int failCount = 0;
+            int dbSize =  c.getCount();
+            int readCount = 0;
 
 
 
             c.moveToFirst();
 
 
-            while ((dbSize > 0) && SystemLog.isPlugged())
+            while ((dbSize > 0) && SystemLog.isPlugged() && noError)
             {
                 
                 Log.i(TAG, "Total DB size is: " + dbSize);
@@ -127,23 +129,32 @@ public class Uploader
                     ? dbSize : MAX_UPLOAD_SIZE;
 
                 content = new ArrayList<String>();
+                pId = -1;
 
                 for (int i = 0; i < maxCount; i++)
                 {
 
                     id = c.getInt(idIndex);
+                    if ((pId != -1) && (id != (pId + 1)))
+                    {
+                        Log.i(TAG, "Cursor jumped.");
+                        noError = false;
+                        break;
+                    }
                     
                     newRecord =  c.getString(logIndex);
 
 
                     content.add(URLEncoder.encode(newRecord));
                     keySet.add(id);
+                    readCount++;
+                    pId = id;
 
                     c.moveToNext();
                     
                 }
                 
-                dbSize -= maxCount;
+                dbSize -= readCount;
 
                 do
                 {

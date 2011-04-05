@@ -76,7 +76,7 @@ public class SystemLogDbAdaptor
     private static final long ONE_DAY = 24 * ONE_HOUR;
 
 
-    private static final long MIN_TICKLE_INTERVAL = ONE_DAY;
+    private static final long MIN_TICKLE_INTERVAL = ONE_HOUR;
 
 
     private final Context mCtx;
@@ -249,6 +249,7 @@ public class SystemLogDbAdaptor
         catch (JSONException e)
         {
             Log.e(TAG, "JSON Error", e);
+            return;
         }
 
 
