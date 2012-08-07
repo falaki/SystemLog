@@ -89,6 +89,7 @@ public class SystemLogDumper
         //HashSet<Integer> keySet = new HashSet<Integer>();
         try
         {
+            mDbAdaptor.open();
             Cursor  c = mDbAdaptor.fetchAllEntries();
             int dataIndex = c.getColumnIndex(
                     SystemLogDbAdaptor.KEY_LOGRECORD);
@@ -156,6 +157,7 @@ public class SystemLogDumper
                 {
                     Log.e(TAG, "tryDump failed");
                     c.close();
+                    mDbAdaptor.close();
                     return;
                 }
 
@@ -163,6 +165,7 @@ public class SystemLogDumper
                 dbSize -= MAX_DUMP_SIZE;
             }
             c.close();
+            mDbAdaptor.close();
             
 
             

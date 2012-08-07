@@ -16,6 +16,8 @@ import android.os.Handler;
 import android.os.Message;
 import android.os.SystemClock;
 import android.os.RemoteException;
+import android.net.ConnectivityManager;
+import android.net.NetworkInfo;
 import android.app.AlarmManager;
 import android.app.PendingIntent;
 import android.util.Log;
@@ -51,6 +53,9 @@ public class SystemLog extends Service
     public static final String UPLOAD_ACTION = "upload";
 	
 	private static final boolean OPERATE_LOCAL = false;
+
+    /** Flag to limit upload to WiFi networks */
+    public static final boolean WIFI_ONLY = false;
 	
 	/** Version of SystemLog JSON record format */
 	public static final String VER = "2.2";
@@ -100,6 +105,10 @@ public class SystemLog extends Service
     AlarmManager  mAlarmManager;
 
     PendingIntent mUploadSender;
+
+
+    /** Network info object */
+    NetworkInfo mWiFi;
     
     /** Table that keeps tag to table name associations */
     private HashMap<String, String> mTagMapping;
@@ -318,9 +327,17 @@ public class SystemLog extends Service
             (TelephonyManager)this.getSystemService(
                     Context.TELEPHONY_SERVICE);
         this.IMEI = mTelManager.getDeviceId(); 
+        ConnectivityManager connManager = (ConnectivityManager)
+            getSystemService(CONNECTIVITY_SERVICE);
+        //mWiFi = connManager.getNetworkInfo(ConnectivityManager.TYPE_WIFI);
+
+        mWiFi = connManager.getActiveNetworkInfo();
+
+
+        
         mIsUploading = false;
         mDbAdaptor = new SystemLogDbAdaptor(this);
-        mUploader = new Uploader(mDbAdaptor);
+        mUploader = new Uploader(mDbAdaptor, mWiFi);
         mDumper = new SystemLogDumper(mDbAdaptor);
 
 
@@ -348,6 +365,10 @@ public class SystemLog extends Service
             getSystemService(ALARM_SERVICE);
         mAlarmManager.setRepeating(AlarmManager.ELAPSED_REALTIME,
                 firstTime, TWO_MINUTES, mUploadSender);
+
+
+
+
     }
 
 
@@ -379,6 +400,9 @@ public class SystemLog extends Service
 
 
         mDbAdaptor.createEntry(filteredMsg, tag, loglevel, logger);
+
+        //TODO
+        /* Send data to ohmagePhone */
         return true;
         
     }
@@ -455,7 +479,7 @@ public class SystemLog extends Service
      * thread is spawned and tasked with the upload job.
      * 
      */
-    private void upload()
+    private synchronized void upload()
     {
         if (!mIsUploading)
         {
@@ -476,9 +500,20 @@ public class SystemLog extends Service
                     {
                     	mDumper.tryDump();
                     }
+                    else if (WIFI_ONLY)
+                    {
+                        //if (mWiFi.isConnected())
+                        if( mWiFi != null && mWiFi.getType() == ConnectivityManager.TYPE_WIFI )
+                        {
+                            Log.i(TAG, "Connected to WiFi.");
+                        	mUploader.tryUpload();
+                        }
+                        else
+                            Log.i(TAG, "Not connected to WiFi.");
+                    }
                     else
                     {
-                    	mUploader.tryUpload();
+                        mUploader.tryUpload();
                     }
                     	
 
@@ -489,6 +524,8 @@ public class SystemLog extends Service
                             SystemClock.uptimeMillis());
                 }
             };
+
+            uploaderThread.setPriority(Thread.MIN_PRIORITY);
 
             uploaderThread.start();
 

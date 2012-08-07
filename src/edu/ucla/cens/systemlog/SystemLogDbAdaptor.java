@@ -270,22 +270,64 @@ public class SystemLogDbAdaptor
      * Opens a new thread and flush the cached log records into the
      * database. 
      */
-    public void flushDb()
+    public synchronized void flushDb()
     {
-        synchronized(this)
-        {
-            mTempBuffer = mBuffer;
-            mBuffer = new HashSet<ContentValues>();
-        }
+        mTempBuffer = mBuffer;
+        mBuffer = new HashSet<ContentValues>();
 
         Log.i(TAG, "flushDB called to flush " + mTempBuffer.size() 
                 + " records.");
 
+
+        if (!mOpenLock)
+        {
+            try
+            {
+                mDbHelper = new DatabaseHelper(mCtx);
+                mDb = mDbHelper.getWritableDatabase();
+            }
+            catch (SQLException se)
+            {
+                Log.e(TAG, "Could not open DB to flush records" , 
+                        se);
+                SystemLogWakeLock.releaseCpuLock();
+                return;
+            }
+        }
+        mFlushLock = true;
+
+        Log.i(TAG, "Flusshing " 
+                + mTempBuffer.size() + " records.");
+
+        long retVal = 0;
+        for (ContentValues value : mTempBuffer)
+        {
+            retVal = mDb.insert(DATABASE_TABLE, null, value);
+            if (retVal == -1)
+            {
+                Log.i(TAG, "Trying to recreate the database.");
+                mDbHelper.onCreate(mDb);
+            }
+    }
+
+
+        if (!mOpenLock)
+        {
+            mDb.close();
+            mDbHelper.close();
+        }
+
+        mFlushLock = false;
+        SystemLogWakeLock.releaseCpuLock();
+        //mWL.release();
+
+
+        /*
         Thread flushThread = new Thread()
         {
             public void run()
             {
-                mWL.acquire();
+                //mWL.acquire();
 
                 if (!mOpenLock)
                 {
@@ -298,6 +340,8 @@ public class SystemLogDbAdaptor
                     {
                         Log.e(TAG, "Could not open DB to flush records" , 
                                 se);
+                        SystemLogWakeLock.releaseCpuLock();
+                        return;
                     }
                 }
                 mFlushLock = true;
@@ -305,8 +349,22 @@ public class SystemLogDbAdaptor
                 Log.i(TAG, "Flusshing " 
                         + mTempBuffer.size() + " records.");
 
+                long retVal = 0;
                 for (ContentValues value : mTempBuffer)
-                    mDb.insert(DATABASE_TABLE, null, value);
+                {
+                    try
+                    {
+                        retVal = mDb.insert(DATABASE_TABLE, null, value);
+                        if (retVal == -1)
+                            mDbHelper.onCreate(mDb);
+                    }
+                    catch (SQLiteException se)
+                    {
+                        Log.i(TAG, "Database was locked. Will "
+                                + "try later");
+                    }
+                }
+
 
                 if (!mOpenLock)
                 {
@@ -315,12 +373,14 @@ public class SystemLogDbAdaptor
                 }
 
                 mFlushLock = false;
-                mWL.release();
+                SystemLogWakeLock.releaseCpuLock();
+                //mWL.release();
             }
 
         };
 
         flushThread.start();
+        */
 
 
     }
@@ -363,7 +423,7 @@ public class SystemLogDbAdaptor
      * 
      * @return              Cursor over all notes
      */
-    public Cursor fetchAllEntries() 
+    public synchronized Cursor fetchAllEntries() 
     {
 
         return mDb.query(DATABASE_TABLE, new String[] {KEY_ROWID, KEY_LOGGER,
@@ -378,7 +438,7 @@ public class SystemLogDbAdaptor
      * @return              Cursor positioned to matching note, if found
      * @throws SQLException if note could not be found/retrieved
      */
-    public Cursor fetchEntry(long rowId) throws SQLException 
+    public synchronized Cursor fetchEntry(long rowId) throws SQLException 
     {
 
         Cursor mCursor = mDb.query(true, DATABASE_TABLE, new String[]

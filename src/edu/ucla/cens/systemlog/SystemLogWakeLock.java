@@ -56,7 +56,8 @@ public class SystemLogWakeLock
 
         if (sCpuWakeLock != null)
         {
-            sCpuWakeLock.release();
+            if (sCpuWakeLock.isHeld())
+                sCpuWakeLock.release();
             sCpuWakeLock = null;
         }
     }

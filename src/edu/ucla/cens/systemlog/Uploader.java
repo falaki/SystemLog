@@ -8,6 +8,8 @@ package edu.ucla.cens.systemlog;
 import android.database.Cursor;
 import android.util.Log;
 import android.database.SQLException;
+import android.net.NetworkInfo;
+import android.net.ConnectivityManager;
 
 import java.lang.ProcessBuilder;
 import java.util.HashSet;
@@ -52,17 +54,37 @@ public class Uploader
     /** Database adaptor object */
     private SystemLogDbAdaptor mDbAdaptor;
 
+
+    private NetworkInfo mWiFi;
+
     /** Maximum number of records that will be read and deleted at a
      * time*/
-    private static final int MAX_UPLOAD_SIZE = 1000;
+    private static final int MAX_UPLOAD_SIZE = 100;
 
     /** After this number of failiurs upload will abort */
     private static final int MAX_FAIL_COUNT = 50;
 
+    private static final boolean WIFI_ONLY = SystemLog.WIFI_ONLY;
 
-    /** Upload location of the SystemSens server */
+
+    /** Upload location of systemlog.cens server */
+    /*
+    private static final String CUSTOM_URL 
+        = "https://systemlog.cens.ucla.edu/systemlog/logs/put/";
+    */
+
+
+    /** Upload location of systemlog.ohmage server */
+    private static final String CUSTOM_URL 
+        = "https://systemlog.ohmage.org/systemlog/logs/put/";
+
+
+    /* For CS219 
     private static final String CUSTOM_URL 
         = "https://systemlog2.cens.ucla.edu/systemlog/logs/put/";
+    */
+
+
 
 
     private static final String IMEI = SystemLog.IMEI;
@@ -75,9 +97,10 @@ public class Uploader
      *
      * @param   dbAdaptor       database adaptor object
      */
-    public Uploader(SystemLogDbAdaptor dbAdaptor)
+    public Uploader(SystemLogDbAdaptor dbAdaptor, NetworkInfo wifi)
     {
         this.mDbAdaptor = dbAdaptor;
+        this.mWiFi = wifi;
     }
 
 
@@ -91,6 +114,7 @@ public class Uploader
         Cursor  c = null;
         boolean postResult = false;
         boolean noError = true;
+
 
         try
         {
@@ -123,6 +147,18 @@ public class Uploader
 
             while ((dbSize > 0) && SystemLog.isPlugged() && noError)
             {
+
+                /* Check WiFi connectivity before using airtime if in
+                 * WIFI_ONLY mode.
+                */
+                if (WIFI_ONLY)
+                {
+                    //if (!mWiFi.isConnected())
+                    if( mWiFi == null && mWiFi.getType() != ConnectivityManager.TYPE_WIFI )
+                    {
+                        break;
+                    }
+                }
                 
                 Log.i(TAG, "Total DB size is: " + dbSize);
                 int maxCount = (MAX_UPLOAD_SIZE > dbSize) 
@@ -176,18 +212,6 @@ public class Uploader
                                     + "]");
                         }
 
-                        /*
-                        // Too inefficient   
-                        for (int delId : keySet)
-                        {
-                            if( !mDbAdaptor.deleteEntry(delId) )
-                            {
-                                Log.e(TAG, "Error deleting row ID =" +
-                                        delId);
-                            }
-                        }
-                        */
-
                     }
                     else
                     {
@@ -204,15 +228,12 @@ public class Uploader
                             + "Will try at another time");
 
                     c.close();
-
-                    // Tickle the DB
                     mDbAdaptor.close();
                     SystemLogWakeLock.releaseCpuLock();
                     return;
                 }
 
             }
-
             c.close();
             mDbAdaptor.tickle();
             mDbAdaptor.close();
@@ -226,9 +247,9 @@ public class Uploader
             if (c != null)
             {
                 c.close();
-                mDbAdaptor.close();
             }
 
+            mDbAdaptor.close();
             SystemLogWakeLock.releaseCpuLock();
         }
 
